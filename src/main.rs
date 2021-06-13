@@ -1,11 +1,12 @@
 use anyhow::{bail, Context, Result};
+use zip::ZipArchive;
 use std::{fs::File, io::prelude::*};
 
 fn usage(program_name: &str) -> String {
     format!(
         "Usage:
-    {0} pack <resourcepack.zip> <textures.png> <manifest.json> (--create_manifest)
-    {0} unpack <textures.png> <resourcepack.zip> <manifest.json> <template_resourcepack.zip>",
+    {0} pack <resourcepack.zip> <textures.png> <atlas.json> (--create_atlas)
+    {0} unpack <textures.png> <resourcepack.zip> <atlas.json> <template_resourcepack.zip>",
         program_name
     )
 }
@@ -35,29 +36,90 @@ fn path_filter(path: &str) -> bool {
 fn pack(
     res_pack_dir: &str,
     texture_out_dir: &str,
-    manifest_dir: &str,
-    create_manifest: bool,
+    atlas_dir: &str,
+    make_atlas: bool,
 ) -> Result<()> {
     let res_pack_file = File::open(res_pack_dir).context("Failed to open resource pack")?;
     let mut res_pack_archive =
         zip::ZipArchive::new(res_pack_file).context("Failed to open resource pack zip file")?;
 
-    for i in 0..res_pack_archive.len() {
-        let mut file = res_pack_archive.by_index(i)?;
-        let name = file.name();
-        if file.is_file() && path_filter(&name) {
-            println!("{}", file.name());
-            let tex = read_block_texture(&mut file)?;
-        }
-    }
+    let atlas = if make_atlas {
+        create_atlas(&mut res_pack_archive, res_pack_dir.to_string())?
+    } else {
+        todo!("Load atlas")
+    };
+
+    dbg!(atlas);
 
     Ok(())
 }
 
-/// Read a 16x16 texture in RGB format
-fn read_block_texture<R: Read>(reader: &mut R) -> Result<Vec<u8>> {
-    let decoder = png::Decoder::new(reader);
-    let (info, mut reader) = decoder.read_info()?;
-    println!("{:?}", info);
-    Ok(vec![])
+/// Width of image patches
+const TEX_WIDTH: u32 = 16;
+/// Size of image patches in bytes
+const TEX_SIZE: u32 = TEX_WIDTH * TEX_WIDTH * 3 * 4;
+
+/// Check png info to see if it is compatible
+fn check_info(info: &png::OutputInfo) -> bool {
+    info.width == TEX_WIDTH
+        && info.height == TEX_WIDTH
+        && info.bit_depth == png::BitDepth::Eight
+        && matches!(info.color_type, png::ColorType::RGB | png::ColorType::RGBA)
 }
+
+/// Check a png file to see if it is compatible
+fn check_texture<R: Read>(reader: &mut R) -> Result<bool> {
+    let decoder = png::Decoder::new(reader);
+    let (info, _) = decoder.read_info()?;
+    Ok(check_info(&info))
+}
+
+fn create_atlas<R: Read + Seek>(archive: &mut ZipArchive<R>, pack_name: String) -> Result<Atlas> {
+    let mut good_names = vec![];
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let name = file.name().to_string();
+        let is_file = file.is_file();
+        if is_file && path_filter(&name) && check_texture(&mut file)? {
+            good_names.push(name);
+        }
+    }
+
+    let side_length = (good_names.len() as f32).sqrt().ceil() as u32;
+
+    let mut squares = vec![];
+    'outer: for y in 0..side_length {
+        for x in 0..side_length {
+            let name = match good_names.pop() {
+                Some(n) => n,
+                None => break 'outer,
+            };
+            squares.push(AtlasSquare {
+                name,
+                x,
+                y
+            });
+        }
+    }
+
+    Ok(Atlas {
+        pack_name,
+        side_length,
+        squares,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct Atlas {
+    pack_name: String,
+    side_length: u32,
+    squares: Vec<AtlasSquare>,
+}
+
+#[derive(Debug, Clone)]
+struct AtlasSquare {
+    name: String,
+    x: u32,
+    y: u32,
+}
+
