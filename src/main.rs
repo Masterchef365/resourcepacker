@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail, ensure};
 use zip::ZipArchive;
 use std::{fs::File, io::prelude::*};
+use serde::{Serialize, Deserialize};
 
 fn usage(program_name: &str) -> String {
     format!(
@@ -43,17 +44,19 @@ fn pack(
     let mut res_pack_archive =
         zip::ZipArchive::new(res_pack_file).context("Failed to open resource pack zip file")?;
 
-    let atlas = if make_atlas {
-        create_atlas(&mut res_pack_archive, res_pack_dir.to_string())?
+    let atlas: Atlas = if make_atlas {
+        let atlas = create_atlas(&mut res_pack_archive, res_pack_dir.to_string())?;
+        let mut file = File::create(atlas_dir).context("Failed to create atlas file")?;
+        serde_json::to_writer(&mut file, &atlas).context("Failed to serialize atlas")?;
+        atlas
     } else {
-        todo!("Load atlas")
+        let mut file = File::open(atlas_dir).context("Failed to open atlas file")?;
+        serde_json::from_reader(&mut file).context("Failed to parse atlas")?
     };
 
     let megatexture = compile_megatexture(&mut res_pack_archive, &atlas)?;
     let mut out_file = File::create(texture_out_dir)?;
-    write_texture_rgb(&mut out_file, &megatexture);
-
-    dbg!(atlas);
+    write_texture_rgb(&mut out_file, &megatexture)?;
 
     Ok(())
 }
@@ -62,7 +65,6 @@ fn pack(
 const TEX_WIDTH: u32 = 16;
 /// Size of image patches in bytes
 const TEX_CHANNELS: u32 = 3;
-const TEX_SIZE: u32 = TEX_WIDTH * TEX_WIDTH * TEX_CHANNELS;
 
 /// Check png info to see if it is compatible
 fn check_info(info: &png::OutputInfo) -> bool {
@@ -210,18 +212,18 @@ fn compile_megatexture<R: Read + Seek>(archive: &mut ZipArchive<R>, atlas: &Atla
     Ok(megatexture)
 }
 
-#[derive(Debug, Clone)]
-struct Atlas {
-    pack_name: String,
-    side_length: u32,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Atlas {
+    pub pack_name: String,
+    pub side_length: u32,
     /// Atlas squares. Note: Always in left-right top-bottom order!
-    squares: Vec<AtlasSquare>,
+    pub squares: Vec<AtlasSquare>,
 }
 
-#[derive(Debug, Clone)]
-struct AtlasSquare {
-    name: String,
-    x: u32,
-    y: u32,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AtlasSquare {
+    pub name: String,
+    pub x: u32,
+    pub y: u32,
 }
 
