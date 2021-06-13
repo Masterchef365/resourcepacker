@@ -162,13 +162,20 @@ fn rgba_to_rgb(data: Vec<u8>) -> Vec<u8> {
 fn read_texture_rgb<R: Read>(reader: &mut R) -> Result<RgbImage> {
     let decoder = png::Decoder::new(reader);
     let (info, mut reader) = decoder.read_info()?;
-    let mut data = vec![0; (info.width * info.height * TEX_CHANNELS) as usize];
+
+    let n_channels = match info.color_type {
+        png::ColorType::RGB => 3,
+        png::ColorType::RGBA => 4,
+        other => bail!("Unsupported color type {:?}", other),
+    };
+
+    let mut data = vec![0; (info.width * info.height * n_channels) as usize];
     reader.next_frame(&mut data)?;
 
     let rgb_data = match info.color_type {
         png::ColorType::RGB => data,
         png::ColorType::RGBA => rgba_to_rgb(data),
-        other => bail!("Unsupported color type {:?}", other),
+        _ => unreachable!(),
     };
 
     Ok(RgbImage {
